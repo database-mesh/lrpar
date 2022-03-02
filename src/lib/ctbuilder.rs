@@ -568,7 +568,8 @@ where
     };
     use cfgrammar::{yacc::YaccGrammar, TIdx};
     use lrtable::{Action, StIdx, StateTable};
-    use lrpar::{NonStreamingLexer, LexParseError, Lexeme, RecoveryKind, ParseError, parser::AStackType};
+    use lrpar::{NonStreamingLexer, LexParseError, Lexeme, RecoveryKind, parser::AStackType};
+    use crate::parser::Scanner;
 
 ",
         );
@@ -664,11 +665,12 @@ where
                 outs.push_str(&format!(
                     "
     #[allow(dead_code)]
-    pub fn parse<'lexer, 'input: 'lexer>(
-        lexer: &'lexer dyn NonStreamingLexer<'input, {lexemet}, {storaget}>{parse_param},
-        grm: &YaccGrammar<u32>,
-        stable: &StateTable<u32>)
-          -> (::std::option::Option<{actiont}>, ::std::vec::Vec<::lrpar::LexParseError<{lexemet}, {storaget}>>)
+    pub fn parse<'input, 's: 'input>(
+        //lexer: &'input  dyn NonStreamingLexer<'input, {lexemet}, {storaget}>{parse_param},
+        input: &'s str,
+        grm: &'input YaccGrammar<u32>,
+        stable: &'input StateTable<u32>)
+          -> (::std::option::Option<{actiont}>, ::std::vec::Vec<crate::parser::ParseError>)
     {{",
                     lexemet = type_name::<LexemeT>(),
                     storaget = type_name::<StorageT>(),
@@ -751,7 +753,7 @@ where
                     "
         match RTParserBuilder::new(grm, stable)
             .recoverer(::lrpar::RecoveryKind::{recoverer})
-            .parse_actions(lexer, {parse_param}) {{
+            .parse_actions(input, {parse_param}) {{
                 (Some({actionskind}::{actionskindprefix}{ridx}(x)), y) => (Some(x), y),
                 (None, y) => (None, y),
                 _ => unreachable!()
@@ -1127,6 +1129,7 @@ where
         // powerful enough to allow us to incrementally obtain lexemes and buffer them when necessary.
         pub lexemes: Vec<lrlex::lexemes::DefaultLexeme>,
         //actions: &'a [ActionFn<'a, 'b, 'input, lrlex::lexemes::DefaultLexeme, u32, ActionT, ParamT>],
+        pub input: &'input str,
         _param: ParamT,
     }}
 
@@ -1142,30 +1145,50 @@ where
             grm: &'a YaccGrammar<u32>,
             token_cost: TokenCostFn<'a, u32>,
             stable: &'a StateTable<u32>,
-            lexer: &'b dyn NonStreamingLexer<'input, lrlex::lexemes::DefaultLexeme, u32>,
-            lexemes: Vec<lrlex::lexemes::DefaultLexeme>,
+            input: &'input str,
+            //lexer: &'b dyn NonStreamingLexer<'input, lrlex::lexemes::DefaultLexeme, u32>,
+            //lexemes: Vec<lrlex::lexemes::DefaultLexeme>,
             //actions: &'a [ActionFn<'a, 'b, 'input, lrlex::lexemes::DefaultLexeme, u32, ActionT, ParamT>],
             _param: ParamT,
-        ) -> (Option<__GtActionsKind<'a>>, Vec<LexParseError<lrlex::lexemes::DefaultLexeme, u32>>) {{
-            //for tidx in grm.iter_tidxs() {{
-            //    assert!(token_cost(tidx) > 0);
-            //}}
+        ) -> (Option<__GtActionsKind<'a>>, Vec<crate::parser::ParseError>) {{
+
+            let mut scanner = Scanner::new(input);
+            let scan_lexemes = scanner.scan_lex_token();
+
+            let mut lexemes = Vec::with_capacity(scan_lexemes.len());
+
+            let mut lex_errors: Vec<lrpar::LexParseError<lrlex::lexemes::DefaultLexeme<u32>, u32>> = Vec::new();
+            for e in &scan_lexemes {{
+                match e {{
+                    Ok(l) => lexemes.push(*l),
+                    Err(e) => {{
+                        lex_errors = vec![lrpar::LexParseError::LexError((*e).into())];
+                        break
+                    }}
+                }}
+            }}
+
+            let lexer = lrlex::LRNonStreamingLexer::new(input, scan_lexemes, vec![]);
+            if !lex_errors.is_empty() {{
+                return (None, vec![crate::parser::ParseError::new(lex_errors[0].pp(&lexer, &token_epp))])
+            }}
+
             let psr = Parser {{
                 rcvry_kind,
                 grm,
                 token_cost: Box::new(token_cost),
                 stable,
-                lexer,
+                input,
+                lexer: &lexer,
                 lexemes,
                 _param,
             }};
-     
+
             let mut pstack = Vec::with_capacity(20);
             pstack.push(stable.start_state());
             let mut astack = Vec::with_capacity(20);
-            let mut errors = Vec::with_capacity(10);
+            let mut errors: Vec<crate::parser::ParseError> = Vec::with_capacity(2);
             let mut spans = Vec::with_capacity(20);
-
             let accpt = psr.lr(0, &mut pstack, &mut astack, &mut errors, &mut spans);
             (accpt, errors)
         }}
@@ -1188,7 +1211,7 @@ where
             mut laidx: usize,
             pstack: &mut PStack,
             astack: &mut Vec<AStackType<lrlex::lexemes::DefaultLexeme, __GtActionsKind<'input>>>,
-            errors: &mut Vec<LexParseError<lrlex::lexemes::DefaultLexeme, u32>>,
+            errors: &mut Vec<crate::parser::ParseError>,
             spans: &mut Vec<::lrpar::Span>,
         ) -> Option<__GtActionsKind<'input>> {{
             loop {{
@@ -1241,13 +1264,13 @@ where
                         match self.rcvry_kind {{
                             RecoveryKind::CPCTPlus | RecoveryKind::None => {{
                                 let la_lexeme = self.next_lexeme(laidx);
+                                let err = LexParseError::ParseError(lrpar::ParseError {{
+                                    stidx,
+                                    lexeme: la_lexeme,
+                                    repairs: vec![]
+                                }});
                                 errors.push(
-                                    ParseError {{
-                                        stidx,
-                                        lexeme: la_lexeme,
-                                        repairs: vec![],
-                                    }}
-                                    .into(),
+                                    crate::parser::ParseError::new(err.pp(self.lexer, &token_epp))
                                 );
                                 return None;
                             }}
@@ -1336,25 +1359,19 @@ where
         /// be a mix of lexing and parsing errors.
         pub fn parse_actions<'b: 'a, 'input: 'b, ParamT: Copy>(
             &self,
-            lexer: &'b dyn NonStreamingLexer<'input, lrlex::lexemes::DefaultLexeme, u32>,
+            //lexer: &'b dyn NonStreamingLexer<'input, lrlex::lexemes::DefaultLexeme, u32>,
+            input: &'input str,
             //actions: &'a [ActionFn<'a, 'b, 'input, lrlex::lexemes::DefaultLexeme, u32, ActionT, ParamT>],
             param: ParamT,
-        ) -> (Option<__GtActionsKind<'a>>, Vec<LexParseError<lrlex::lexemes::DefaultLexeme, u32>>) {{
-            let mut lexemes = Vec::with_capacity(200);
-            for e in lexer.iter().collect::<Vec<_>>() {{
-                match e {{
-                    Ok(l) => lexemes.push(l),
-                    Err(e) => return (None, vec![e.into()]),
-                }}
-            }}
+        ) -> (Option<__GtActionsKind<'a>>, Vec<crate::parser::ParseError>) {{
             Parser::parse_actions(
                 self.recoverer,
                 self.grm,
                 self.term_costs,
                 self.stable,
-                lexer,
-                lexemes,
-            //    actions,
+                input,
+                //lexemes,
+                //actions,
                 param,
             )
         }}
