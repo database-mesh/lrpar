@@ -655,6 +655,7 @@ where
                     None => "".to_owned(),
                 };
 
+                // Only record, when need to remove parse_param, we can set `param` type is `()`.
                 //let (parse_param, _) = match grm.parse_param() {
                 //    Some((name, tyname)) => (name.clone(), tyname.clone()),
                 //    None => ("".to_owned(), "()".to_owned()),
@@ -703,6 +704,7 @@ where
             YaccKind::Eco => unreachable!(),
         };
 
+        // Only record Origin code.
         //outs.push_str(&format!(
         //    "
         //let (grm, stable) = ::lrpar::ctbuilder::_reconstitute({}, {});",
@@ -731,6 +733,7 @@ where
                     Some((name, tyname)) => (name.clone(), tyname.clone()),
                     None => ("()".to_owned(), "()".to_owned()),
                 };
+       // Only record Origin code.
        //         outs.push_str(&format!(
        //             "\n        #[allow(clippy::type_complexity)]
        // let actions: ::std::vec::Vec<&dyn Fn(::cfgrammar::RIdx<{storaget}>,
